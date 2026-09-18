@@ -1,0 +1,29 @@
+<!--
+SYNTHETIC fixture — hand-written, not captured from any live page.
+
+A Product with a name and sku but no offers and no availability at all. Some
+storefronts really do serve pages like this (availability arrives via a later
+client-side call), and the parser must report UNKNOWN for them rather than
+inventing OUT_OF_STOCK.
+
+For the real Nintendo markup, see nintendo_switch2_zelda_2026-09-17.html,
+which DOES carry an availability value.
+-->
+<html>
+  <head>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Product",
+        "name": "Nintendo Switch 2 - The Legend of Zelda - 40th Anniversary Edition",
+        "sku": "121642"
+      }
+    </script>
+  </head>
+  <body>
+    <h1>Nintendo Switch 2 - The Legend of Zelda - 40th Anniversary Edition</h1>
+    <p>Release date: October 29, 2026</p>
+    <p>SKU: 121642</p>
+    <button>Find retailers</button>
+  </body>
+</html>

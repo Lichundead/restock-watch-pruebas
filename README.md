@@ -1,5 +1,9 @@
 # restock-watch
 
+[![CI](https://github.com/gaa101704-arch/Restock-Watch/actions/workflows/ci.yml/badge.svg)](https://github.com/gaa101704-arch/Restock-Watch/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+
 Watch product pages and get told **once** when something you want becomes
 buyable.
 
@@ -35,16 +39,23 @@ deliberate limit, not a missing feature.
 
 ## Quick start
 
-Needs Python 3.11 or newer. Nothing to install for the default setup.
+Needs Python 3.11 or newer. The default watcher has no runtime dependencies outside the standard library.
 
 ```bash
-git clone <this repo> restock-watch
+git clone https://github.com/gaa101704-arch/Restock-Watch.git restock-watch
 cd restock-watch
 
 cp config.example.toml config.toml
 $EDITOR config.toml          # point it at what you actually want
 
 python3 -m restock_watch     # one cycle, prints to the terminal
+```
+
+If you prefer an installed CLI:
+
+```bash
+python3 -m pip install -e .
+restock-watch --config config.toml
 ```
 
 The first run records a baseline and stays quiet — it is not going to alert
@@ -59,6 +70,31 @@ python3 -m restock_watch --loop      # stays in the foreground
 
 or install the systemd user timer / cron line in [`deploy/`](deploy/), which
 is what you want if it should survive you closing the laptop.
+
+## n8n (optional, and best alongside the watcher)
+
+If you already run **n8n Cloud** or **self-hosted n8n**, there is importable
+workflow JSON for it. n8n is entirely optional — everything above works
+without it — and it is at its best *next to* the Python watcher rather than
+instead of it:
+
+- [`n8n/restock-watch-webhook.json`](n8n/restock-watch-webhook.json) — **the
+  recommended pairing.** The watcher keeps doing the monitoring, where it has
+  the browser source, per-retailer adapters and the transition logic; n8n
+  takes the alert from there and handles Slack, Telegram, email, logging,
+  escalation and anything else downstream. Set
+  `[notify.webhook] enabled = true` and point `RESTOCK_WEBHOOK_URL` at it.
+- [`n8n/restock-watch-native.json`](n8n/restock-watch-native.json) — a
+  lightweight HTTP/JSON-LD monitor that runs entirely inside n8n, for when you
+  would rather not run a Python process at all. It cannot drive a browser and
+  has no custom adapters, so treat it as the smaller option, not the better
+  one.
+
+The workflow templates contain no credential IDs, tokens, or secrets. Import
+one, replace the example configuration, attach your credentials or delivery
+nodes, test it, and activate it.
+
+See [docs/N8N.md](docs/N8N.md) for setup details and the tradeoffs.
 
 ## Getting alerts somewhere other than the terminal
 
@@ -124,7 +160,10 @@ Everything is compared against a normalised vocabulary:
 
 The rules that matter:
 
-- Only a transition **into** `IN_STOCK` or `PREORDER` alerts.
+- Only a transition **into** `IN_STOCK` or `PREORDER` alerts. Pre-orders count
+  on purpose: for a console launch the pre-order window is usually the only
+  shot at a launch-day unit, and it can open and sell out without the item ever
+  being "in stock".
 - `UNKNOWN` and `BLOCKED` never alert and never overwrite a known status —
   so a CAPTCHA on Tuesday followed by a normal page on Wednesday does not
   look like a restock.
@@ -136,7 +175,8 @@ Set `alert_on_any_change = true` while you are tuning if you want to see
 every transition, including things going out of stock.
 
 Exit codes, for wrapping in a monitor: `0` idle, `2` an alert fired,
-`42` bad config.
+`3` an alert was due but no channel delivered it (state is left untouched so
+the next cycle retries), `42` bad config.
 
 ## Tests
 
@@ -155,9 +195,21 @@ restock_watch/
   config.py       TOML loading and validation
   sources/        one adapter per kind of page
   notify/         one module per channel
+n8n/              importable n8n Cloud / self-hosted workflows
 deploy/           systemd user timer + cron example
-tests/            unit tests for the alerting logic
+docs/             integration and extension guides
+tests/            unit tests for parsing, state and alerting logic
+.github/workflows CI
 ```
+
+## Contributing and security
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
+development workflow and source-adapter rules.
+
+Please report security-sensitive issues privately rather than opening a public
+issue. See [SECURITY.md](SECURITY.md). Release history is tracked in
+[CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
