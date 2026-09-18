@@ -4,7 +4,7 @@ All notable changes to Restock Watch are documented here.
 
 The project follows [Semantic Versioning](https://semver.org/) for public releases.
 
-## [Unreleased]
+## [1.1.0] - 2026-09-17
 
 ### Added
 - Importable n8n-native monitoring workflow for n8n Cloud and self-hosted n8n.
