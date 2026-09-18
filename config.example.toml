@@ -1,0 +1,76 @@
+# restock-watch configuration.
+#
+# Copy this to config.toml and edit. Nothing secret goes in here — channel
+# credentials come from the environment (see .env.example).
+#
+# Shipped as-is it watches the Nintendo Switch 2 Zelda 40th Anniversary
+# Edition, which is a fine thing to test against. Point it at whatever you
+# are actually waiting for.
+
+[general]
+product_name = "Nintendo Switch 2 - Zelda 40th Anniversary Edition"
+
+# Seconds between cycles in --loop mode. The floor is 60 and the default is
+# deliberately unhurried: a residential IP polling a big retailer every few
+# seconds gets rate-limited or blocked, which makes you slower, not faster.
+interval_seconds = 300
+
+# Where last-seen statuses live. Delete this file to re-baseline.
+state_file = "data/state.json"
+
+# Only IN_STOCK and PREORDER alert by default. Set true to also be told
+# about, say, IN_STOCK -> OUT_OF_STOCK. Noisier; useful while tuning.
+alert_on_any_change = false
+
+# Included in the alert body so you can act without hunting for the tab.
+links = [
+  "https://www.nintendo.com/us/store/products/nintendo-switch-2-the-legend-of-zelda-40th-anniversary-edition-121642/",
+  "https://www.nowinstock.net/videogaming/consoles/nintendoswitch2/",
+]
+
+
+# ── What to check ────────────────────────────────────────────────────────
+# Each [[watch]] runs every cycle. Note the double brackets: it is a list.
+
+# First-party store page. Reads schema.org availability straight out of the
+# served HTML — fast, dependency-free, and authoritative for this product.
+[[watch]]
+source = "jsonld"
+label = "Nintendo"
+url = "https://www.nintendo.com/us/store/products/nintendo-switch-2-the-legend-of-zelda-40th-anniversary-edition-121642/"
+
+# One fetch covers several retailers. `match` keeps other products on the
+# same tracker page from leaking into your results.
+[[watch]]
+source = "nowinstock"
+label = "nis"
+url = "https://www.nowinstock.net/videogaming/consoles/nintendoswitch2/"
+match = "Zelda"
+retailers = ["Amazon", "Best Buy", "Target", "Walmart"]
+
+# Headless-browser check, for stores that render the buy box in JavaScript.
+# Needs Playwright (see README), so it is off by default — delete the
+# leading '#' on each line to enable it.
+# [[watch]]
+# source = "browser"
+# label = "Amazon"
+# url = "https://www.amazon.com/dp/B0HJ6F8L6V"
+# fallback_urls = ["https://www.amazon.com/dp/B0HJ6F8L6V?m=1"]
+
+
+# ── Where alerts go ──────────────────────────────────────────────────────
+# Every enabled channel is tried independently, so one failure does not
+# swallow the alert.
+
+[notify.console]
+enabled = true
+
+[notify.telegram]
+enabled = false
+
+[notify.email]
+enabled = false
+
+[notify.webhook]
+enabled = false
+# url = "https://example.com/hooks/restock"

@@ -1,0 +1,13 @@
+# Cron alternative to the systemd timer. Install with: crontab -e
+#
+# Cron runs with a bare environment, so the .env file has to be sourced
+# explicitly and python3 given by full path.
+#
+# Every 5 minutes:
+*/5 * * * * cd "$HOME/restock-watch" && set -a && . ./.env && set +a && /usr/bin/python3 -m restock_watch --config config.toml >> data/cron.log 2>&1
+
+# Notes:
+#  - Exit code 2 means an alert fired. Cron does not care, but a monitoring
+#    wrapper might.
+#  - If you do not use any env-based channel (console-only), drop the
+#    `set -a && . ./.env && set +a &&` part.

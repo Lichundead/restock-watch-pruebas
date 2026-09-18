@@ -1,0 +1,26 @@
+# Runs one check cycle. Paired with restock-watch.timer.
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/restock-watch.* ~/.config/systemd/user/
+#   # edit the paths below to match where you cloned this
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now restock-watch.timer
+#   systemctl --user status restock-watch.timer
+#   journalctl --user -u restock-watch -f
+#
+# For it to keep running while you are logged out:
+#   loginctl enable-linger $USER
+
+[Unit]
+Description=restock-watch — check tracked products once
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/restock-watch
+EnvironmentFile=-%h/restock-watch/.env
+ExecStart=/usr/bin/python3 -m restock_watch --config %h/restock-watch/config.toml
+
+# SUCCESS=idle, 2=an alert was sent. Both are fine; anything else is a failure.
+SuccessExitStatus=0 2

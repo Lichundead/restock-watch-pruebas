@@ -1,0 +1,21 @@
+# Secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Your config and your runtime state
+config.toml
+data/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+.DS_Store

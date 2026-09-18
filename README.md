@@ -1,0 +1,164 @@
+# restock-watch
+
+Watch product pages and get told **once** when something you want becomes
+buyable.
+
+Built for console launches and GPU drops, but it works for anything with a
+product page. It runs on one machine, needs no server, no database and no
+account anywhere, and the core has **zero dependencies** beyond Python 3.11.
+
+```
+$ python3 -m restock_watch
+2026-09-17 19:05:59 INFO    Nintendo: OUT_OF_STOCK (unchanged)
+2026-09-17 19:05:59 INFO    nis:Best Buy: OUT_OF_STOCK -> PREORDER
+
+*** IN STOCK: Nintendo Switch 2 - Zelda 40th Anniversary Edition ***
+Nintendo Switch 2 - Zelda 40th Anniversary Edition is available:
+
+  nis:Best Buy: OUT_OF_STOCK -> PREORDER
+
+Buy links:
+  https://www.nintendo.com/us/store/products/...
+```
+
+## What it does, and what it deliberately does not
+
+It polls the pages you list, normalises whatever they say into a small set
+of statuses, and when one crosses from "can't buy" to `IN_STOCK` or
+`PREORDER` it notifies you on every channel you enabled. It remembers what
+it last saw, so a restock pages you once, not every five minutes until you
+notice.
+
+It **does not buy anything for you.** There is no cart code, no checkout
+automation, no stored payment details. It tells you; you decide. That is a
+deliberate limit, not a missing feature.
+
+## Quick start
+
+Needs Python 3.11 or newer. Nothing to install for the default setup.
+
+```bash
+git clone <this repo> restock-watch
+cd restock-watch
+
+cp config.example.toml config.toml
+$EDITOR config.toml          # point it at what you actually want
+
+python3 -m restock_watch     # one cycle, prints to the terminal
+```
+
+The first run records a baseline and stays quiet — it is not going to alert
+you about a status you already knew. From the second run on, it reports
+changes.
+
+Then pick how it should keep running:
+
+```bash
+python3 -m restock_watch --loop      # stays in the foreground
+```
+
+or install the systemd user timer / cron line in [`deploy/`](deploy/), which
+is what you want if it should survive you closing the laptop.
+
+## Getting alerts somewhere other than the terminal
+
+Enable a channel in `config.toml` and put its credentials in the
+environment — never in the config file:
+
+```bash
+cp .env.example .env
+$EDITOR .env
+set -a; . ./.env; set +a
+python3 -m restock_watch --test-notify
+```
+
+| Channel | Enable with | Needs |
+|---|---|---|
+| `console` | on by default | nothing |
+| `telegram` | `[notify.telegram] enabled = true` | bot token + chat id (~2 min, see `.env.example`) |
+| `email` | `[notify.email] enabled = true` | SMTP host + app password |
+| `webhook` | `[notify.webhook] enabled = true` | a URL — point it at ntfy, Home Assistant, n8n, Discord, whatever |
+
+Enable several. They fire independently, so a dead SMTP server does not
+cost you the Telegram message.
+
+## Choosing what to watch
+
+Each `[[watch]]` in the config picks a **source** — a small adapter that
+knows how to read one kind of page:
+
+| Source | How it works | Good for |
+|---|---|---|
+| `jsonld` | Reads schema.org availability out of the served HTML | Most first-party stores. Fast, no dependencies. |
+| `nowinstock` | Scrapes a NowInStock tracker table | Several retailers from one request |
+| `browser` | Headless Chromium, inspects the real buy box | Stores that render in JavaScript or block plain HTTP |
+
+`browser` is the only one with a dependency, and it is optional:
+
+```bash
+pip install playwright
+python3 -m playwright install chromium
+```
+
+Adding a source for a store none of these handle is about thirty lines —
+see [`docs/ADDING-A-SOURCE.md`](docs/ADDING-A-SOURCE.md).
+
+## Please don't hammer the retailers
+
+The minimum interval is 60 seconds and the default is 300, and you should
+leave it there or raise it. Polling a storefront every few seconds from a
+home connection gets your IP rate-limited or blocked, which makes you
+*slower* to hear about a restock, not faster. It also degrades a service
+other people are using. Check the site's terms; some prohibit automated
+access outright, and a published API is always the better path when one
+exists.
+
+Two watches at five minutes covering four retailers each will beat one
+aggressive scraper that got itself banned.
+
+## How the alerting logic works
+
+Everything is compared against a normalised vocabulary:
+`IN_STOCK`, `PREORDER`, `BACKORDER`, `OUT_OF_STOCK`, plus `UNKNOWN` and
+`BLOCKED` for "we learned nothing this cycle".
+
+The rules that matter:
+
+- Only a transition **into** `IN_STOCK` or `PREORDER` alerts.
+- `UNKNOWN` and `BLOCKED` never alert and never overwrite a known status —
+  so a CAPTCHA on Tuesday followed by a normal page on Wednesday does not
+  look like a restock.
+- First sighting of a target is a baseline, not an alert.
+- A source that throws or returns nothing is a failure, not an
+  out-of-stock. Silence is never treated as bad news.
+
+Set `alert_on_any_change = true` while you are tuning if you want to see
+every transition, including things going out of stock.
+
+Exit codes, for wrapping in a monitor: `0` idle, `2` an alert fired,
+`42` bad config.
+
+## Tests
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+## Layout
+
+```text
+restock_watch/
+  __main__.py     CLI
+  watcher.py      poll -> detect transition -> alert
+  status.py       the status vocabulary and normalisation
+  state.py        last-seen statuses, atomic JSON
+  config.py       TOML loading and validation
+  sources/        one adapter per kind of page
+  notify/         one module per channel
+deploy/           systemd user timer + cron example
+tests/            unit tests for the alerting logic
+```
+
+## License
+
+MIT — see [LICENSE](LICENSE).

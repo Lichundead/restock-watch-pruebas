@@ -1,0 +1,13 @@
+[Unit]
+Description=restock-watch — run the check on a schedule
+
+[Timer]
+# First run shortly after login/boot, then every 5 minutes.
+OnBootSec=2min
+OnUnitActiveSec=5min
+# Spread the load a little so you are not hitting the retailer on the dot.
+RandomizedDelaySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
