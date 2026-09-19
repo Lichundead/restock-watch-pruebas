@@ -4,6 +4,25 @@ All notable changes to Restock Watch are documented here.
 
 The project follows [Semantic Versioning](https://semver.org/) for public releases.
 
+## [Unreleased]
+
+### Added
+- Per-watch `interval_seconds` and `offset_seconds`, so a cheap check is no
+  longer held to the cadence of an expensive one. The 60s floor applies per
+  watch too.
+- Conditional requests: `ETag`/`Last-Modified` are remembered, so a repeat
+  check usually costs the server a bodyless 304. A 304 means "unchanged",
+  never `BLOCKED`.
+- Automatic backoff on 429/503 that obeys the server's own `Retry-After`.
+- Alerts carry the exact retailer link when a source can name one, with
+  Amazon's `aod=1` rewritten to the product page so the buy button is the
+  first thing you see.
+
+### Removed
+- The optional Playwright browser source. It was the project's only
+  dependency, the most bot-walled check it had, and the NowInStock adapter
+  already covers the same retailers. The watcher is now stdlib-only.
+
 ## [1.1.0] - 2026-09-17
 
 ### Added

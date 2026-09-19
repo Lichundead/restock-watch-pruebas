@@ -9,7 +9,7 @@ in an automation platform rather than only in a message.
 There are two supported patterns, and they are not equal. If you run both
 pieces, **Option 2 is the recommended shape**: the watcher does the
 monitoring, n8n does the routing. Each is good at the part the other is not —
-the watcher has the browser source, the per-retailer adapters and the
+the watcher has the per-retailer adapters, conditional requests and the
 transition logic; n8n has the delivery nodes, retries, logging and escalation.
 Option 1 exists for people who would rather not run a Python process at all,
 and it gives up real capability to get there.
@@ -20,7 +20,7 @@ Import:
 
 `n8n/restock-watch-native.json`
 
-This workflow runs entirely inside n8n. It is intended for product pages whose availability can be read from ordinary HTML or JSON-LD without a real browser.
+This workflow runs entirely inside n8n. It is intended for product pages whose availability can be read from ordinary HTML or JSON-LD.
 
 After import:
 
@@ -34,7 +34,7 @@ The first successful production observation establishes a baseline and does not 
 
 ### Limitations
 
-The n8n-native workflow does not run Playwright and is intentionally narrower than the Python application. Use the webhook bridge when the target site requires a browser, custom source adapter, or retailer-specific parsing.
+The n8n-native workflow is intentionally narrower than the Python application. Use the webhook bridge when the target site needs a custom source adapter, retailer-specific parsing, or per-watch scheduling.
 
 It also duplicates the availability logic in a second language, so parser fixes made in the Python source adapters do not reach it. Running both patterns against the same product is a reasonable belt-and-braces setup — two schedulers, two parsers, two failure modes — but keep the native workflow pointed at pages simple enough that plain HTML is genuinely enough.
 

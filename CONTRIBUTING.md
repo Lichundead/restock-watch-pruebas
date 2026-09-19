@@ -15,13 +15,6 @@ python -m pip install -e .
 python -m unittest discover -s tests -v
 ```
 
-For browser-source work:
-
-```bash
-python -m pip install -e ".[browser]"
-python -m playwright install chromium
-```
-
 ## Pull requests
 
 Keep changes focused and include tests for behavior changes. In particular, source adapters should include parser fixtures or mocked page responses for both positive and negative availability states.

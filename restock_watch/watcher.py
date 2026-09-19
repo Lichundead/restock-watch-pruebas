@@ -67,9 +67,9 @@ def collect(watches: List[dict], on_error=None) -> Dict[str, str]:
                 continue
 
             # The readings differ, but UNKNOWN and BLOCKED are not opinions —
-            # they mean "this source learned nothing". A bot-walled browser
-            # check must not veto a working one, or the alert this tool exists
-            # to deliver is silently dropped.
+            # they mean "this source learned nothing". A source that hit a
+            # bot wall must not veto a working one, or the alert this tool
+            # exists to deliver is silently dropped.
             if current in st.UNINFORMATIVE:
                 LOG.info(
                     "watch %s reported %s for %s (no signal); keeping %s",

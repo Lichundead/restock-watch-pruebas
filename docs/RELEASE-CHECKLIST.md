@@ -19,11 +19,11 @@ The GitHub integration used during review cannot modify these settings.
 
 Suggested description:
 
-> Self-hosted Python restock and preorder monitor with transition-aware alerts, Playwright support, and importable n8n workflows.
+> Self-hosted, dependency-free Python restock and preorder monitor with transition-aware alerts, per-watch scheduling, and importable n8n workflows.
 
 Suggested topics:
 
-`python`, `restock`, `inventory-monitor`, `stock-alerts`, `n8n`, `playwright`, `automation`, `self-hosted`
+`python`, `restock`, `inventory-monitor`, `stock-alerts`, `n8n`, `automation`, `self-hosted`
 
 If the project is meant to be publicly discoverable, change repository visibility from private to public only after reviewing the full Git history for secrets.
 

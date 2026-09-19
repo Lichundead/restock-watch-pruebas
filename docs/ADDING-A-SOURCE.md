@@ -39,12 +39,11 @@ Register it:
 
 ```python
 # restock_watch/sources/__init__.py
-from . import browser, jsonld, mystore, nowinstock
+from . import jsonld, mystore, nowinstock
 
 SOURCES = {
     "jsonld": jsonld.check,
     "nowinstock": nowinstock.check,
-    "browser": browser.check,
     "mystore": mystore.check,
 }
 ```

@@ -80,14 +80,14 @@ instead of it:
 
 - [`n8n/restock-watch-webhook.json`](n8n/restock-watch-webhook.json) — **the
   recommended pairing.** The watcher keeps doing the monitoring, where it has
-  the browser source, per-retailer adapters and the transition logic; n8n
+  the per-retailer adapters, conditional requests and the transition logic; n8n
   takes the alert from there and handles Slack, Telegram, email, logging,
   escalation and anything else downstream. Set
   `[notify.webhook] enabled = true` and point `RESTOCK_WEBHOOK_URL` at it.
 - [`n8n/restock-watch-native.json`](n8n/restock-watch-native.json) — a
   lightweight HTTP/JSON-LD monitor that runs entirely inside n8n, for when you
-  would rather not run a Python process at all. It cannot drive a browser and
-  has no custom adapters, so treat it as the smaller option, not the better
+  would rather not run a Python process at all. It has no custom adapters and
+  no per-watch scheduling, so treat it as the smaller option, not the better
   one.
 
 The workflow templates contain no credential IDs, tokens, or secrets. Import
@@ -127,14 +127,9 @@ knows how to read one kind of page:
 |---|---|---|
 | `jsonld` | Reads schema.org availability out of the served HTML | Most first-party stores. Fast, no dependencies. |
 | `nowinstock` | Scrapes a NowInStock tracker table | Several retailers from one request |
-| `browser` | Headless Chromium, inspects the real buy box | Stores that render in JavaScript or block plain HTTP |
 
-`browser` is the only one with a dependency, and it is optional:
-
-```bash
-pip install playwright
-python3 -m playwright install chromium
-```
+Neither needs a dependency: the watcher is stdlib-only, so installing it is
+just cloning it.
 
 Adding a source for a store none of these handle is about thirty lines —
 see [`docs/ADDING-A-SOURCE.md`](docs/ADDING-A-SOURCE.md).

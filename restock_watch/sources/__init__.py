@@ -18,12 +18,11 @@ from __future__ import annotations
 
 from typing import Callable, Dict
 
-from . import browser, jsonld, nowinstock
+from . import jsonld, nowinstock
 
 SOURCES: Dict[str, Callable[[dict], Dict[str, str]]] = {
     "jsonld": jsonld.check,
     "nowinstock": nowinstock.check,
-    "browser": browser.check,
 }
 
 
@@ -36,26 +35,11 @@ def get(name: str) -> Callable[[dict], Dict[str, str]]:
         ) from None
 
 
-#: Modules that can name the exact URL behind a target, each exposing
-#: link_for(target). Optional: a source with nothing better than the
-#: watch's own url simply has no entry here. Looked up by attribute at
-#: call time (not bound here) so tests can monkeypatch e.g.
-#: nowinstock.link_for and have it take effect.
-#:
-#: Order matters: browser watches point straight at a product page, which
-#: beats the tracker's affiliate redirect. Targets are named per watch, so
-#: in practice only one of these ever answers for a given target anyway.
-LINK_SOURCES = {
-    "browser": browser,
-    "nowinstock": nowinstock,
-}
-
-
 def link_for(target: str) -> "str | None":
     """The best known product URL for ``target``, or None if nothing beats
-    the generic links already in ``[general] links``."""
-    for module in LINK_SOURCES.values():
-        link = module.link_for(target)
-        if link:
-            return link
-    return None
+    the generic links already in ``[general] links``.
+
+    Looked up on the module at call time rather than bound here, so a test
+    can monkeypatch ``nowinstock.link_for`` and have it take effect.
+    """
+    return nowinstock.link_for(target)

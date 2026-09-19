@@ -2,10 +2,10 @@
 
 The reason this module exists: one global ``interval_seconds`` forces the
 cheapest check and the most expensive one onto the same cadence. A
-first-party JSON-LD page is one small GET; a headless-browser check is a
-Chromium launch against a retailer that actively fingerprints clients. Making
+first-party JSON-LD page is one small GET that a 304 usually makes free; a
+tracker page aggregating four retailers is neither cheap nor as fresh. Making
 the first wait for the second is what people "fix" by lowering the global
-interval, which is exactly how the browser check gets the IP blocked.
+interval, which is exactly how the expensive check gets rate-limited.
 
 So each watch keeps its own clock:
 

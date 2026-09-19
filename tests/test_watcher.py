@@ -17,7 +17,7 @@ from restock_watch import status as st  # noqa: E402
 from restock_watch import watcher  # noqa: E402
 from restock_watch import sources  # noqa: E402
 from restock_watch.schedule import Scheduler  # noqa: E402
-from restock_watch.sources import browser, jsonld, nowinstock  # noqa: E402
+from restock_watch.sources import jsonld, nowinstock  # noqa: E402
 from restock_watch.state import State  # noqa: E402
 
 
@@ -689,130 +689,6 @@ class TestCollectReportsErrors(unittest.TestCase):
     def test_collect_still_works_without_a_callback(self):
         watcher.get_source = lambda name: (lambda watch: {"a": st.IN_STOCK})
         self.assertEqual(watcher.collect([{"source": "x", "label": "a"}]), {"a": st.IN_STOCK})
-
-
-class TestBuyBoxProbeInARealBrowser(unittest.TestCase):
-    """Runs the probe JS in Chromium against saved buy-box markup.
-
-    Every case here is a shape that made the old probe answer IN_STOCK for
-    a page that was not in stock. A false IN_STOCK is worse than a miss:
-    it alerts you for nothing, and it writes a wrong baseline that
-    suppresses the next real change.
-    """
-
-    FIXTURES = Path(__file__).resolve().parent / "fixtures" / "buybox"
-
-    EXPECTED = {
-        # Spanish pre-order: "Reserva ahora" matches no English needle, and
-        # the old code fell through to the InStock default.
-        "es_preorder.html": st.PREORDER,
-        # Spanish sold out: the add-to-cart element is still in the DOM,
-        # just hidden. "It exists" is not "you can buy it".
-        "es_outofstock.html": st.OUT_OF_STOCK,
-        "es_instock.html": st.IN_STOCK,
-        # Sold out, but the page carries other products' Add to Cart
-        # buttons. Scanning the whole document finds one every time.
-        "en_outofstock_con_ruido.html": st.OUT_OF_STOCK,
-        "en_preorder.html": st.PREORDER,
-    }
-
-    @classmethod
-    def setUpClass(cls):
-        try:
-            from playwright.sync_api import sync_playwright
-        except ImportError:
-            raise unittest.SkipTest("playwright not installed")
-        cls._playwright = sync_playwright().start()
-        cls._browser = cls._playwright.chromium.launch(headless=True)
-
-    @classmethod
-    def tearDownClass(cls):
-        cls._browser.close()
-        cls._playwright.stop()
-
-    def _status_of(self, filename: str) -> str:
-        page = self._browser.new_page()
-        try:
-            page.goto((self.FIXTURES / filename).resolve().as_uri())
-            return st.normalise(page.evaluate(browser._BUY_BOX_PROBE))
-        finally:
-            page.close()
-
-    def test_every_saved_buy_box_is_read_correctly(self):
-        for filename, expected in self.EXPECTED.items():
-            with self.subTest(page=filename):
-                self.assertEqual(self._status_of(filename), expected)
-
-    def test_nothing_conclusive_is_unknown_not_in_stock(self):
-        page = self._browser.new_page()
-        try:
-            page.goto("data:text/html,<html><body><p>hola</p></body></html>")
-            raw = page.evaluate(browser._BUY_BOX_PROBE)
-        finally:
-            page.close()
-        self.assertEqual(raw, "")
-        self.assertEqual(st.normalise(raw), st.UNKNOWN)
-        self.assertNotIn(st.UNKNOWN, st.ACTIONABLE)
-
-
-class TestBrowserSource(unittest.TestCase):
-    """The slow source: it must not pay a fixed sleep it does not need."""
-
-    class FakePage:
-        """Answers empty until ``ready_after_ms`` of simulated waiting."""
-
-        def __init__(self, ready_after_ms, answer="PreOrder"):
-            self.ready_after_ms = ready_after_ms
-            self.answer = answer
-            self.waited_ms = 0
-            self.probes = 0
-
-        def evaluate(self, js):
-            self.probes += 1
-            return self.answer if self.waited_ms >= self.ready_after_ms else ""
-
-        def wait_for_timeout(self, ms):
-            self.waited_ms += ms
-
-    def tearDown(self):
-        browser._LAST_LINKS.clear()
-
-    def test_probe_returns_as_soon_as_the_buy_box_answers(self):
-        page = self.FakePage(ready_after_ms=500)
-        raw = browser._probe_when_ready(page, "js", budget_ms=2500)
-
-        self.assertEqual(raw, "PreOrder")
-        # The old fixed sleep always paid 2000ms; this must stop early.
-        self.assertLessEqual(page.waited_ms, 500)
-
-    def test_probe_gives_up_at_the_budget(self):
-        page = self.FakePage(ready_after_ms=10**6)
-        raw = browser._probe_when_ready(page, "js", budget_ms=1000)
-
-        self.assertEqual(raw, "")
-        self.assertLessEqual(page.waited_ms, 1000 + 250)
-
-    def test_a_page_ready_immediately_never_sleeps(self):
-        page = self.FakePage(ready_after_ms=0)
-        browser._probe_when_ready(page, "js", budget_ms=2500)
-        self.assertEqual(page.waited_ms, 0)
-
-    def test_link_for_is_empty_before_any_check(self):
-        self.assertIsNone(browser.link_for("Amazon directo"))
-
-    def test_link_for_returns_the_watched_url(self):
-        browser._LAST_LINKS["Amazon directo"] = "https://www.amazon.com/dp/B0HJ6F8L6V"
-        self.assertEqual(
-            sources.link_for("Amazon directo"), "https://www.amazon.com/dp/B0HJ6F8L6V"
-        )
-
-    def test_a_browser_link_is_preferred_over_a_tracker_redirect(self):
-        # Different targets in practice, but if they ever collide the direct
-        # product page is the one worth sending someone to.
-        browser._LAST_LINKS["X"] = "https://www.amazon.com/dp/B0HJ6F8L6V"
-        nowinstock._LAST_LINKS["X"] = "https://howl.link/redirect"
-        self.addCleanup(nowinstock._LAST_LINKS.clear)
-        self.assertEqual(sources.link_for("X"), "https://www.amazon.com/dp/B0HJ6F8L6V")
 
 
 class TestCliExitCodes(unittest.TestCase):
