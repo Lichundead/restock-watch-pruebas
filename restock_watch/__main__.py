@@ -10,7 +10,9 @@ from pathlib import Path
 
 from . import __version__
 from .config import ConfigError, load
+from .http import RateLimited
 from .notify import Alert, dispatch
+from .schedule import Scheduler
 from .state import State
 from .watcher import NotificationDeliveryError, run_once
 
@@ -96,20 +98,45 @@ def main(argv=None) -> int:
             return EXIT_DELIVERY_FAILED
         return EXIT_ALERTED if alerted else EXIT_IDLE
 
-    logging.info("watching every %ss — Ctrl-C to stop", interval)
+    logging.info(
+        "watching — per-watch intervals, default %ss — Ctrl-C to stop", interval
+    )
+    scheduler = Scheduler(config["watch"], interval)
     while True:
+        due = scheduler.due()
+        if due:
+            indices = [index for index, _ in due]
+            errors: dict[int, BaseException] = {}
+
+            def note(position: int, exc: BaseException) -> None:
+                errors[indices[position]] = exc
+
+            try:
+                run_once(
+                    config,
+                    state,
+                    dry_run=args.dry_run,
+                    watches=[watch for _, watch in due],
+                    on_error=note,
+                )
+            except KeyboardInterrupt:
+                raise
+            except NotificationDeliveryError as exc:
+                # State was preserved, so the next cycle retries the alert.
+                logging.error("%s — will retry next cycle", exc)
+            except Exception:
+                # A crash in one cycle must not end the watch.
+                logging.exception("cycle failed, continuing")
+
+            for index in indices:
+                exc = errors.get(index)
+                if isinstance(exc, RateLimited):
+                    scheduler.record_rate_limited(index, exc.retry_after)
+                else:
+                    scheduler.record_success(index)
+
         try:
-            run_once(config, state, dry_run=args.dry_run)
-        except KeyboardInterrupt:
-            raise
-        except NotificationDeliveryError as exc:
-            # State was preserved, so the next cycle retries the alert.
-            logging.error("%s — will retry next cycle", exc)
-        except Exception:
-            # A crash in one cycle must not end the watch.
-            logging.exception("cycle failed, continuing")
-        try:
-            time.sleep(interval)
+            time.sleep(scheduler.sleep_seconds())
         except KeyboardInterrupt:
             logging.info("stopped")
             return EXIT_IDLE

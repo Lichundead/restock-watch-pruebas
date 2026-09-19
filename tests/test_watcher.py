@@ -11,9 +11,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from restock_watch import http  # noqa: E402
+from restock_watch import schedule  # noqa: E402
 from restock_watch import status as st  # noqa: E402
 from restock_watch import watcher  # noqa: E402
-from restock_watch.sources import jsonld, nowinstock  # noqa: E402
+from restock_watch import sources  # noqa: E402
+from restock_watch.schedule import Scheduler  # noqa: E402
+from restock_watch.sources import browser, jsonld, nowinstock  # noqa: E402
 from restock_watch.state import State  # noqa: E402
 
 
@@ -358,6 +362,457 @@ class TestCollectMergesSources(unittest.TestCase):
 
     def test_two_uninformative_readings_stay_uninformative(self):
         self.assertIn(self._collect(st.BLOCKED, st.UNKNOWN), st.UNINFORMATIVE)
+
+
+class TestNowInStockLinks(unittest.TestCase):
+    """Each row's own href, not just the generic [general] links."""
+
+    FIXTURES = Path(__file__).resolve().parent / "fixtures"
+    PRODUCT = "Legend of Zelda 40th Anniversary Edition"
+
+    def setUp(self):
+        self._real_fetch = nowinstock.fetch
+        self.sample = (
+            self.FIXTURES / "nowinstock_switch2_zelda_2026-09-17.html"
+        ).read_text()
+        nowinstock.fetch = lambda *a, **k: self.sample
+
+    def tearDown(self):
+        nowinstock.fetch = self._real_fetch
+
+    def test_check_records_a_link_per_target(self):
+        nowinstock.check({"url": "x", "match": self.PRODUCT, "label": "nis"})
+        self.assertEqual(nowinstock.link_for("nis:Amazon"), "https://example.invalid/product")
+
+    def test_unknown_target_has_no_link(self):
+        nowinstock.check({"url": "x", "match": self.PRODUCT, "label": "nis"})
+        self.assertIsNone(nowinstock.link_for("nis:Nowhere"))
+
+    def test_a_later_check_drops_links_for_targets_no_longer_seen(self):
+        nowinstock.check(
+            {"url": "x", "match": self.PRODUCT, "label": "nis", "retailers": ["Amazon"]}
+        )
+        nowinstock.check(
+            {"url": "x", "match": self.PRODUCT, "label": "nis", "retailers": ["Target"]}
+        )
+        self.assertIsNone(nowinstock.link_for("nis:Amazon"))
+        self.assertEqual(nowinstock.link_for("nis:Target"), "https://example.invalid/product")
+
+    def test_amazon_dp_link_drops_the_all_offers_flag(self):
+        # Real NowInStock href, captured 2026-09-18: aod=1 forces Amazon's
+        # multi-seller popup instead of the product page's own "Reserve
+        # now" button.
+        url = (
+            "https://www.amazon.com/dp/B0HJ6F8L6V"
+            "?tag=nisamain-20&linkCode=ogi&th=1&psc=1&m=ATVPDKIKX0DER&aod=1"
+        )
+        self.assertEqual(nowinstock._clean_link(url), "https://www.amazon.com/dp/B0HJ6F8L6V")
+
+    def test_amazon_gp_product_link_is_also_normalised(self):
+        url = "https://www.amazon.com/gp/product/B0FC5FJZ9Z?tag=nisws2-20"
+        self.assertEqual(nowinstock._clean_link(url), "https://www.amazon.com/dp/B0FC5FJZ9Z")
+
+    def test_amazon_link_with_title_slug_is_also_normalised(self):
+        url = (
+            "https://www.amazon.com/Nintendo-Switch-2-System/dp/B0F3GWXLTS/"
+            "?tag=nisws2-20&linkCode=ogi&th=1&psc=1&m=ATVPDKIKX0DER&aod=1"
+        )
+        self.assertEqual(nowinstock._clean_link(url), "https://www.amazon.com/dp/B0F3GWXLTS")
+
+    def test_non_amazon_links_pass_through_unchanged(self):
+        # Best Buy and Target/Walmart go through an affiliate redirector
+        # (7tiv.net, howl.link) that needs its own query string to work.
+        url = "https://howl.link/h3msxu6tmg269"
+        self.assertEqual(nowinstock._clean_link(url), url)
+
+
+class TestAlertUsesTheSpecificLink(unittest.TestCase):
+    def test_build_alert_shows_the_per_target_link_when_present(self):
+        changes = [
+            {
+                "target": "nis:Amazon",
+                "from": "OUT_OF_STOCK",
+                "to": "PREORDER",
+                "actionable": True,
+                "link": "https://amazon.example/dp/B0TEST",
+            }
+        ]
+        alert = watcher.build_alert(changes, {"general": {"product_name": "Widget"}})
+        self.assertIn("nis:Amazon: OUT_OF_STOCK -> PREORDER — https://amazon.example/dp/B0TEST", alert.body)
+
+    def test_build_alert_omits_the_dash_when_no_link_is_known(self):
+        changes = [
+            {"target": "Nintendo", "from": "OUT_OF_STOCK", "to": "IN_STOCK", "actionable": True}
+        ]
+        alert = watcher.build_alert(changes, {"general": {"product_name": "Widget"}})
+        self.assertIn("Nintendo: OUT_OF_STOCK -> IN_STOCK", alert.body)
+        self.assertNotIn("—", alert.body)
+
+    def test_run_once_attaches_the_nowinstock_link_before_alerting(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        state = State(Path(tmp.name) / "state.json")
+        state.set("nis:Amazon", st.OUT_OF_STOCK)
+
+        real_link_for = nowinstock.link_for
+        nowinstock.link_for = lambda target: (
+            "https://amazon.example/dp/B0TEST" if target == "nis:Amazon" else None
+        )
+        real_collect = watcher.collect
+        watcher.collect = lambda watches: {"nis:Amazon": st.PREORDER}
+        sent = {}
+        real_dispatch = watcher.dispatch
+        watcher.dispatch = lambda channel_config, alert: (
+            sent.update(body=alert.body) or {"console": True}
+        )
+        try:
+            config = {
+                "watch": [{"source": "nowinstock"}],
+                "notify": {"console": {"enabled": True}},
+                "general": {"product_name": "Widget"},
+            }
+            watcher.run_once(config, state)
+        finally:
+            nowinstock.link_for = real_link_for
+            watcher.collect = real_collect
+            watcher.dispatch = real_dispatch
+
+        self.assertIn("https://amazon.example/dp/B0TEST", sent["body"])
+
+
+class TestConditionalRequests(unittest.TestCase):
+    """A 304 means 'unchanged', which is not the same as 'we learned nothing'."""
+
+    def setUp(self):
+        self._real_fetch = nowinstock.fetch
+        self._real_jsonld_fetch = jsonld.fetch
+
+    def tearDown(self):
+        nowinstock.fetch = self._real_fetch
+        jsonld.fetch = self._real_jsonld_fetch
+
+    def test_not_modified_is_not_a_fetch_error(self):
+        # Subclassing FetchError would make every source treat a cheap 304
+        # as a bot wall.
+        self.assertFalse(issubclass(http.NotModified, http.FetchError))
+
+    def test_nowinstock_304_reports_nothing_rather_than_blocked(self):
+        def not_modified(*a, **k):
+            raise http.NotModified("x")
+
+        nowinstock.fetch = not_modified
+        self.assertEqual(nowinstock.check({"url": "x", "label": "nis"}), {})
+
+    def test_jsonld_304_reports_nothing_rather_than_blocked(self):
+        def not_modified(*a, **k):
+            raise http.NotModified("x")
+
+        jsonld.fetch = not_modified
+        # BLOCKED here would discard a perfectly good known status.
+        self.assertEqual(jsonld.check({"url": "x", "label": "store"}), {})
+
+    def test_304_leaves_cached_links_intact(self):
+        fixtures = Path(__file__).resolve().parent / "fixtures"
+        sample = (fixtures / "nowinstock_switch2_zelda_2026-09-17.html").read_text()
+        nowinstock.fetch = lambda *a, **k: sample
+        nowinstock.check(
+            {"url": "x", "match": "Legend of Zelda 40th Anniversary Edition", "label": "nis"}
+        )
+
+        def not_modified(*a, **k):
+            raise http.NotModified("x")
+
+        nowinstock.fetch = not_modified
+        nowinstock.check({"url": "x", "label": "nis"})
+        self.assertEqual(nowinstock.link_for("nis:Amazon"), "https://example.invalid/product")
+
+    def test_retry_after_parses_plain_seconds(self):
+        self.assertEqual(http._retry_after_seconds("120"), 120.0)
+
+    def test_retry_after_ignores_junk(self):
+        self.assertIsNone(http._retry_after_seconds("soon"))
+        self.assertIsNone(http._retry_after_seconds(None))
+
+    def test_an_absent_target_is_not_a_change(self):
+        # This is what makes a 304 safe: the target simply is not in the
+        # observed map, and detect_changes only iterates what it was given.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        state = State(Path(tmp.name) / "state.json")
+        state.set("A", st.IN_STOCK)
+        self.assertEqual(watcher.detect_changes({}, state), [])
+        self.assertEqual(state.get("A"), st.IN_STOCK)
+
+
+class TestScheduler(unittest.TestCase):
+    """Each watch on its own clock, and backoff that obeys the server."""
+
+    def setUp(self):
+        self.now = 1000.0
+
+    def _clock(self):
+        return self.now
+
+    def test_a_watch_uses_its_own_interval_over_the_global_one(self):
+        watches = [{"label": "fast", "interval_seconds": 60}, {"label": "slow"}]
+        sched = Scheduler(watches, default_interval=300, clock=self._clock)
+
+        self.assertEqual([w["label"] for _, w in sched.due()], ["fast", "slow"])
+        for index, _ in list(sched.due()):
+            sched.record_success(index)
+
+        self.now += 60
+        self.assertEqual([w["label"] for _, w in sched.due()], ["fast"])
+
+        self.now += 240
+        self.assertEqual({w["label"] for _, w in sched.due()}, {"fast", "slow"})
+
+    def test_offset_staggers_the_first_run(self):
+        watches = [{"label": "a"}, {"label": "b", "offset_seconds": 30}]
+        sched = Scheduler(watches, default_interval=60, clock=self._clock)
+
+        self.assertEqual([w["label"] for _, w in sched.due()], ["a"])
+        self.now += 30
+        self.assertEqual({w["label"] for _, w in sched.due()}, {"a", "b"})
+
+    def test_rate_limit_backs_that_watch_off_and_doubles_on_repeats(self):
+        sched = Scheduler([{"label": "a", "interval_seconds": 60}], 60, clock=self._clock)
+        sched.record_rate_limited(0)
+
+        self.now += 60
+        self.assertEqual(sched.due(), [], "should still be backing off at 1x interval")
+        self.now += 61
+        self.assertEqual(len(sched.due()), 1)
+
+        # A second strike backs off further than the first.
+        sched.record_rate_limited(0)
+        self.now += 121
+        self.assertEqual(sched.due(), [])
+
+    def test_server_retry_after_wins_when_it_is_longer(self):
+        sched = Scheduler([{"label": "a", "interval_seconds": 60}], 60, clock=self._clock)
+        sched.record_rate_limited(0, retry_after=600)
+        self.now += 599
+        self.assertEqual(sched.due(), [])
+        self.now += 2
+        self.assertEqual(len(sched.due()), 1)
+
+    def test_backoff_is_capped(self):
+        sched = Scheduler([{"label": "a", "interval_seconds": 60}], 60, clock=self._clock)
+        sched.record_rate_limited(0, retry_after=10**9)
+        self.now += schedule.MAX_BACKOFF_SECONDS + 1
+        self.assertEqual(len(sched.due()), 1)
+
+    def test_success_clears_the_backoff(self):
+        sched = Scheduler([{"label": "a", "interval_seconds": 60}], 60, clock=self._clock)
+        sched.record_rate_limited(0)
+        sched.record_rate_limited(0)
+        sched.record_success(0)
+
+        self.now += 61
+        self.assertEqual(len(sched.due()), 1, "backoff should not survive a clean run")
+
+    def test_sleep_is_capped_so_ctrl_c_stays_responsive(self):
+        sched = Scheduler([{"label": "a"}], 3600, clock=self._clock)
+        sched.record_success(0)
+        self.assertLessEqual(sched.sleep_seconds(), 60.0)
+
+    def test_one_blocked_watch_does_not_delay_the_others(self):
+        watches = [{"label": "walled"}, {"label": "fine"}]
+        sched = Scheduler(watches, default_interval=60, clock=self._clock)
+        sched.record_rate_limited(0, retry_after=1800)
+        sched.record_success(1)
+
+        self.now += 61
+        self.assertEqual([w["label"] for _, w in sched.due()], ["fine"])
+
+
+class TestPerWatchIntervalValidation(unittest.TestCase):
+    def test_a_per_watch_interval_below_the_floor_is_rejected(self):
+        from restock_watch.config import ConfigError, validate
+
+        config = {
+            "watch": [
+                {"source": "jsonld", "url": "https://x.invalid", "interval_seconds": 5}
+            ]
+        }
+        with self.assertRaises(ConfigError):
+            validate(config)
+
+    def test_a_per_watch_interval_at_the_floor_is_accepted(self):
+        from restock_watch.config import validate
+
+        config = {
+            "watch": [
+                {"source": "jsonld", "url": "https://x.invalid", "interval_seconds": 60}
+            ],
+            "general": {"interval_seconds": 300},
+        }
+        validate(config)
+
+    def test_negative_offset_is_rejected(self):
+        from restock_watch.config import ConfigError, validate
+
+        config = {
+            "watch": [
+                {"source": "jsonld", "url": "https://x.invalid", "offset_seconds": -5}
+            ]
+        }
+        with self.assertRaises(ConfigError):
+            validate(config)
+
+
+class TestCollectReportsErrors(unittest.TestCase):
+    def setUp(self):
+        self._real_get_source = watcher.get_source
+
+    def tearDown(self):
+        watcher.get_source = self._real_get_source
+
+    def test_on_error_receives_the_rate_limit_exception(self):
+        boom = http.RateLimited("nope", retry_after=42)
+
+        def explode(watch):
+            raise boom
+
+        watcher.get_source = lambda name: explode
+        seen = []
+        result = watcher.collect(
+            [{"source": "x", "label": "a"}], on_error=lambda pos, exc: seen.append((pos, exc))
+        )
+
+        self.assertEqual(seen, [(0, boom)])
+        self.assertEqual(seen[0][1].retry_after, 42)
+        # And it is still BLOCKED, so it cannot look like a status change.
+        self.assertEqual(result, {"a": st.BLOCKED})
+
+    def test_collect_still_works_without_a_callback(self):
+        watcher.get_source = lambda name: (lambda watch: {"a": st.IN_STOCK})
+        self.assertEqual(watcher.collect([{"source": "x", "label": "a"}]), {"a": st.IN_STOCK})
+
+
+class TestBuyBoxProbeInARealBrowser(unittest.TestCase):
+    """Runs the probe JS in Chromium against saved buy-box markup.
+
+    Every case here is a shape that made the old probe answer IN_STOCK for
+    a page that was not in stock. A false IN_STOCK is worse than a miss:
+    it alerts you for nothing, and it writes a wrong baseline that
+    suppresses the next real change.
+    """
+
+    FIXTURES = Path(__file__).resolve().parent / "fixtures" / "buybox"
+
+    EXPECTED = {
+        # Spanish pre-order: "Reserva ahora" matches no English needle, and
+        # the old code fell through to the InStock default.
+        "es_preorder.html": st.PREORDER,
+        # Spanish sold out: the add-to-cart element is still in the DOM,
+        # just hidden. "It exists" is not "you can buy it".
+        "es_outofstock.html": st.OUT_OF_STOCK,
+        "es_instock.html": st.IN_STOCK,
+        # Sold out, but the page carries other products' Add to Cart
+        # buttons. Scanning the whole document finds one every time.
+        "en_outofstock_con_ruido.html": st.OUT_OF_STOCK,
+        "en_preorder.html": st.PREORDER,
+    }
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            raise unittest.SkipTest("playwright not installed")
+        cls._playwright = sync_playwright().start()
+        cls._browser = cls._playwright.chromium.launch(headless=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._browser.close()
+        cls._playwright.stop()
+
+    def _status_of(self, filename: str) -> str:
+        page = self._browser.new_page()
+        try:
+            page.goto((self.FIXTURES / filename).resolve().as_uri())
+            return st.normalise(page.evaluate(browser._BUY_BOX_PROBE))
+        finally:
+            page.close()
+
+    def test_every_saved_buy_box_is_read_correctly(self):
+        for filename, expected in self.EXPECTED.items():
+            with self.subTest(page=filename):
+                self.assertEqual(self._status_of(filename), expected)
+
+    def test_nothing_conclusive_is_unknown_not_in_stock(self):
+        page = self._browser.new_page()
+        try:
+            page.goto("data:text/html,<html><body><p>hola</p></body></html>")
+            raw = page.evaluate(browser._BUY_BOX_PROBE)
+        finally:
+            page.close()
+        self.assertEqual(raw, "")
+        self.assertEqual(st.normalise(raw), st.UNKNOWN)
+        self.assertNotIn(st.UNKNOWN, st.ACTIONABLE)
+
+
+class TestBrowserSource(unittest.TestCase):
+    """The slow source: it must not pay a fixed sleep it does not need."""
+
+    class FakePage:
+        """Answers empty until ``ready_after_ms`` of simulated waiting."""
+
+        def __init__(self, ready_after_ms, answer="PreOrder"):
+            self.ready_after_ms = ready_after_ms
+            self.answer = answer
+            self.waited_ms = 0
+            self.probes = 0
+
+        def evaluate(self, js):
+            self.probes += 1
+            return self.answer if self.waited_ms >= self.ready_after_ms else ""
+
+        def wait_for_timeout(self, ms):
+            self.waited_ms += ms
+
+    def tearDown(self):
+        browser._LAST_LINKS.clear()
+
+    def test_probe_returns_as_soon_as_the_buy_box_answers(self):
+        page = self.FakePage(ready_after_ms=500)
+        raw = browser._probe_when_ready(page, "js", budget_ms=2500)
+
+        self.assertEqual(raw, "PreOrder")
+        # The old fixed sleep always paid 2000ms; this must stop early.
+        self.assertLessEqual(page.waited_ms, 500)
+
+    def test_probe_gives_up_at_the_budget(self):
+        page = self.FakePage(ready_after_ms=10**6)
+        raw = browser._probe_when_ready(page, "js", budget_ms=1000)
+
+        self.assertEqual(raw, "")
+        self.assertLessEqual(page.waited_ms, 1000 + 250)
+
+    def test_a_page_ready_immediately_never_sleeps(self):
+        page = self.FakePage(ready_after_ms=0)
+        browser._probe_when_ready(page, "js", budget_ms=2500)
+        self.assertEqual(page.waited_ms, 0)
+
+    def test_link_for_is_empty_before_any_check(self):
+        self.assertIsNone(browser.link_for("Amazon directo"))
+
+    def test_link_for_returns_the_watched_url(self):
+        browser._LAST_LINKS["Amazon directo"] = "https://www.amazon.com/dp/B0HJ6F8L6V"
+        self.assertEqual(
+            sources.link_for("Amazon directo"), "https://www.amazon.com/dp/B0HJ6F8L6V"
+        )
+
+    def test_a_browser_link_is_preferred_over_a_tracker_redirect(self):
+        # Different targets in practice, but if they ever collide the direct
+        # product page is the one worth sending someone to.
+        browser._LAST_LINKS["X"] = "https://www.amazon.com/dp/B0HJ6F8L6V"
+        nowinstock._LAST_LINKS["X"] = "https://howl.link/redirect"
+        self.addCleanup(nowinstock._LAST_LINKS.clear)
+        self.assertEqual(sources.link_for("X"), "https://www.amazon.com/dp/B0HJ6F8L6V")
 
 
 class TestCliExitCodes(unittest.TestCase):

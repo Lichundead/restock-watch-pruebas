@@ -11,9 +11,10 @@
 [general]
 product_name = "Nintendo Switch 2 - Zelda 40th Anniversary Edition"
 
-# Seconds between cycles in --loop mode. The floor is 60 and the default is
-# deliberately unhurried: a residential IP polling a big retailer every few
-# seconds gets rate-limited or blocked, which makes you slower, not faster.
+# Seconds between cycles in --loop mode. This is the fallback for any watch
+# that does not set its own interval_seconds. The floor is 60 — and it
+# applies per watch too, so giving a watch its own clock is for tuning
+# cadence, not for evading the limit.
 interval_seconds = 300
 
 # Where last-seen statuses live. Delete this file to re-baseline.
@@ -43,6 +44,9 @@ url = "https://www.nintendo.com/us/store/products/nintendo-switch-2-the-legend-o
 # SKU rather than a word like "Zelda" means a different Zelda product on the
 # same page can never satisfy the match.
 match = "121642"
+# One small GET against a first-party store, and ETag/Last-Modified means a
+# repeat check usually costs them a bodyless 304. This one can go fast.
+interval_seconds = 60
 
 # One fetch covers several retailers. `match` keeps other products on the
 # same tracker page from leaking into your results.
@@ -53,20 +57,39 @@ url = "https://www.nowinstock.net/videogaming/consoles/nintendoswitch2/"
 # The tracker lists several Switch 2 configurations. Match the full edition
 # name so the plain console and the Mario Kart bundle cannot leak in.
 match = "Legend of Zelda 40th Anniversary Edition"
+# The tracker page states it refreshes once a minute, so asking more often
+# than that returns identical data at twice the cost. Offset by 30s from the
+# Nintendo watch above: two different endpoints, each still polled once a
+# minute, but news arrives roughly every 30 seconds.
+interval_seconds = 60
+offset_seconds = 30
 # Nintendo Store is deliberately absent: the first-party watch above already
 # covers it, and is faster and authoritative.
 retailers = ["Amazon", "Best Buy", "Target", "Walmart"]
 
 # Headless-browser check, for stores that render the buy box in JavaScript.
-# Needs Playwright (see README), so it is off by default — delete the
-# leading '#' on each line to enable it.
+# Needs Playwright:
+#     pip install playwright && python3 -m playwright install chromium
+#
+# This reads Amazon's buy box directly, skipping the tracker's own detection
+# lag — worth having when pre-order windows last only a minute or two. It is
+# also the most expensive and most bot-walled check here, which is why it
+# runs on its own slow clock instead of dragging the cheap watches down with
+# it. A BLOCKED result never vetoes the nowinstock reading above, so the two
+# together are belt and braces rather than a single point of failure.
 # B0HJ6F8L6V is this edition's ASIN, corroborated against the NowInStock
 # tracker's own Amazon link on 2026-09-17.
-# [[watch]]
-# source = "browser"
-# label = "Amazon direct"
-# url = "https://www.amazon.com/dp/B0HJ6F8L6V"
-# fallback_urls = ["https://www.amazon.com/dp/B0HJ6F8L6V?m=1"]
+[[watch]]
+source = "browser"
+label = "Amazon directo"
+url = "https://www.amazon.com/dp/B0HJ6F8L6V"
+fallback_urls = ["https://www.amazon.com/dp/B0HJ6F8L6V?m=1"]
+interval_seconds = 300
+offset_seconds = 45
+# Upper bound on waiting for the buy box to render. The probe returns as soon
+# as it resolves, so a page that renders in 600ms is not billed the whole
+# budget. Raise it if you see UNKNOWN on a page you know was fine.
+render_wait_ms = 2500
 
 
 # ── Where alerts go ──────────────────────────────────────────────────────

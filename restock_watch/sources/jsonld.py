@@ -13,7 +13,7 @@ from html.parser import HTMLParser
 from typing import Dict, Iterable
 
 from .. import status as st
-from ..http import FetchError, fetch
+from ..http import FetchError, NotModified, fetch
 
 
 class _JsonLdCollector(HTMLParser):
@@ -157,6 +157,11 @@ def check(watch: dict) -> Dict[str, str]:
 
     try:
         html = fetch(url, timeout=int(watch.get("timeout", 25)))
+    except NotModified:
+        # 304: the page is unchanged, so the last known status still holds.
+        # Reporting nothing is right — BLOCKED here would throw away a good
+        # reading, and re-reporting the old status would be a guess.
+        return {}
     except FetchError:
         return {label: st.BLOCKED}
 

@@ -57,6 +57,18 @@ def validate(config: dict) -> None:
         if "url" not in watch:
             raise ConfigError(f"{where}: missing 'url'")
 
+        if "interval_seconds" in watch:
+            per_watch = int(watch["interval_seconds"])
+            if per_watch < MIN_INTERVAL_SECONDS:
+                raise ConfigError(
+                    f"{where}: interval_seconds is {per_watch}; the floor is "
+                    f"{MIN_INTERVAL_SECONDS}. The floor applies per watch too — "
+                    "giving one watch its own clock is for polling the cheap "
+                    "sources more often, not for evading the limit."
+                )
+        if "offset_seconds" in watch and int(watch["offset_seconds"]) < 0:
+            raise ConfigError(f"{where}: offset_seconds cannot be negative")
+
     interval = int(config.get("general", {}).get("interval_seconds", 300))
     if interval < MIN_INTERVAL_SECONDS:
         raise ConfigError(

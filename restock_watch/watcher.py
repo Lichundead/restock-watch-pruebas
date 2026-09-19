@@ -8,6 +8,7 @@ from typing import Dict, List
 from . import status as st
 from .notify import Alert, dispatch
 from .sources import get as get_source
+from .sources import link_for as get_target_link
 from .state import State
 
 LOG = logging.getLogger("restock-watch")
@@ -17,16 +18,20 @@ class NotificationDeliveryError(RuntimeError):
     """No enabled notification channel successfully delivered an alert."""
 
 
-def collect(watches: List[dict]) -> Dict[str, str]:
+def collect(watches: List[dict], on_error=None) -> Dict[str, str]:
     """Run every watch and merge the results into one {target: status} map.
 
     Invalid or conflicting source output is downgraded to UNKNOWN instead of
     being allowed to create a false transition.
+
+    ``on_error(position, exception)``, if given, is called for each watch
+    that raised, so a caller can tell a rate-limit apart from a parse bug
+    and back that one watch off instead of the whole run.
     """
     observed: Dict[str, str] = {}
     conflicted: set[str] = set()
 
-    for watch in watches:
+    for position, watch in enumerate(watches):
         label = watch.get("label") or watch.get("source")
         try:
             result = get_source(watch["source"])(watch)
@@ -34,11 +39,13 @@ def collect(watches: List[dict]) -> Dict[str, str]:
             # A source that throws is a source that told us nothing. Record
             # BLOCKED so the run is visible in the log, and move on.
             LOG.error("watch %s failed: %s", label, exc)
+            if on_error is not None:
+                on_error(position, exc)
             observed[str(label)] = st.BLOCKED
             continue
 
         if not result:
-            LOG.warning("watch %s returned nothing", label)
+            LOG.debug("watch %s reported nothing new", label)
 
         for target, current in result.items():
             target = str(target)
@@ -154,7 +161,11 @@ def build_alert(changes: List[dict], config: dict) -> Alert:
         )
         title = f"{title_prefix}: {product}"
         lines = [f"{product} is available:", ""]
-        lines += [f"  {c['target']}: {c['from']} -> {c['to']}" for c in actionable]
+        lines += [
+            f"  {c['target']}: {c['from']} -> {c['to']}"
+            + (f" — {c['link']}" if c.get("link") else "")
+            for c in actionable
+        ]
         other = [c for c in changes if not c["actionable"]]
         if other:
             lines += ["", "Also changed:"]
@@ -179,17 +190,29 @@ def _restore_state(state: State, statuses: dict, meta: dict) -> None:
     state.meta = dict(meta)
 
 
-def run_once(config: dict, state: State, dry_run: bool = False) -> int:
+def run_once(
+    config: dict,
+    state: State,
+    dry_run: bool = False,
+    watches: List[dict] | None = None,
+    on_error=None,
+) -> int:
     """Run one polling cycle and return the number of changes that alerted.
 
     State advances only after an alert is delivered by at least one channel.
     If every delivery attempt fails, the prior state is restored so the next
     cycle can retry the alert.
+
+    ``watches`` defaults to every watch in the config; the scheduler passes
+    only the ones that are due, so a slow watch never holds up a fast one.
     """
     statuses_before = dict(state.statuses)
     meta_before = dict(state.meta)
 
-    observed = collect(config["watch"])
+    selected = config["watch"] if watches is None else watches
+    # Only pass on_error when there is one: collect's old one-argument shape
+    # is still a valid thing for a caller (or a test double) to provide.
+    observed = collect(selected) if on_error is None else collect(selected, on_error=on_error)
     changes = detect_changes(observed, state)
 
     general = config.get("general", {})
@@ -202,6 +225,14 @@ def run_once(config: dict, state: State, dry_run: bool = False) -> int:
         else:
             state.save()
         return 0
+
+    # Attach the exact retailer link when a source can name one (currently
+    # nowinstock), so the alert points straight at the buy box that changed
+    # instead of only the generic [general] links.
+    for change in worth_alerting:
+        link = get_target_link(change["target"])
+        if link:
+            change["link"] = link
 
     alert = build_alert(worth_alerting, config)
 

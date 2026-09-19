@@ -11,11 +11,29 @@ import re
 from typing import Dict
 
 from .. import status as st
-from ..http import FetchError, fetch
+from ..http import FetchError, NotModified, fetch
 
 _ROW = re.compile(r'<tr id="tr\d+"[^>]*class="([\w\s-]+)"[^>]*>(.*?)</tr>', re.DOTALL)
-_RETAILER = re.compile(r">[^<]*:\s*([\w][\w\s./&\'-]+)</a>")
+# Captures the row's own link alongside the retailer name — same anchor,
+# so the URL always points at the exact retailer the name says.
+_RETAILER = re.compile(r'<a href="([^"]+)"[^>]*>[^<]*:\s*([\w][\w\s./&\'-]+)</a>')
 _TAG = re.compile(r"<[^>]+>")
+
+#: target -> product URL at that retailer, from the most recent check().
+#: Populated as a side effect so watcher.py can attach the right buy link
+#: to an alert without a second fetch of the tracker page.
+_LAST_LINKS: Dict[str, str] = {}
+
+# NowInStock's Amazon links carry &m=<seller-id>&aod=1 ("all offers
+# display"). That flag forces the multi-seller offer popup instead of the
+# product page's own buy box, which for a pre-order item is exactly the
+# single "Reserve now" / "Pre-order now" button — so aod=1 trades one click
+# for several. Rewriting to the bare /dp/<ASIN> page restores that button.
+# Matches every shape NowInStock uses: /dp/ASIN, /gp/product/ASIN, and
+# /Product-Title-Slug/dp/ASIN.
+_AMAZON_ASIN = re.compile(
+    r"amazon\.[a-z.]+/(?:[^/]*/)?(?:dp|gp/product)/([A-Z0-9]{10})", re.IGNORECASE
+)
 
 # The real status lives in a dedicated cell. The row's own class is only a
 # coarse highlight: a row showing "Preorder" is still class="offRow", so
@@ -64,6 +82,20 @@ def _status_from_row(row_html: str, row_class: str) -> str:
     return _status_from_row_class(row_class)
 
 
+def _clean_link(url: str) -> str:
+    """Strip tracking params that change *which page* a link lands on.
+
+    Amazon's aod=1 is the only case seen so far: it swaps the single-CTA
+    product page for the multi-seller offer list. Other retailers' links
+    are redirects through an affiliate domain (7tiv.net, howl.link) whose
+    query string the redirector itself needs, so those pass through as-is.
+    """
+    match = _AMAZON_ASIN.search(url)
+    if match:
+        return f"https://www.amazon.com/dp/{match.group(1)}"
+    return url
+
+
 def check(watch: dict) -> Dict[str, str]:
     url = watch["url"]
     # Only rows containing this string are tracked, so one tracker page can
@@ -74,10 +106,16 @@ def check(watch: dict) -> Dict[str, str]:
 
     try:
         html = fetch(url, timeout=int(watch.get("timeout", 25)))
+    except NotModified:
+        # The tracker page is byte-identical to last time, so every status
+        # on it is too. Report nothing: an absent target is "no change",
+        # and the cached links stay valid.
+        return {}
     except FetchError:
         return {}
 
     results: Dict[str, str] = {}
+    links: Dict[str, str] = {}
     for row_class, row_html in _ROW.findall(html):
         text = _TAG.sub(" ", row_html)
         if needle and needle not in text.lower():
@@ -85,9 +123,21 @@ def check(watch: dict) -> Dict[str, str]:
         retailer_match = _RETAILER.search(row_html)
         if not retailer_match:
             continue
-        retailer = retailer_match.group(1).strip()
+        link, retailer = retailer_match.group(1), retailer_match.group(2).strip()
         if only and retailer.lower() not in only:
             continue
-        results[f"{prefix}:{retailer}"] = _status_from_row(row_html, row_class)
+        target = f"{prefix}:{retailer}"
+        results[target] = _status_from_row(row_html, row_class)
+        links[target] = _clean_link(link)
+
+    # Replace, don't merge: a target missing from this cycle (delisted,
+    # filtered out) should not keep pointing at a stale link forever.
+    _LAST_LINKS.clear()
+    _LAST_LINKS.update(links)
 
     return results
+
+
+def link_for(target: str) -> str | None:
+    """The product URL for ``target`` as of the most recent check(), if any."""
+    return _LAST_LINKS.get(target)
